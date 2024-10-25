@@ -56,14 +56,14 @@ use log::{debug, trace};
 ///
 /// [`Rc`]: std::rc::Rc
 #[derive(Clone)]
-pub struct Client {
-    inner: Arc<ClientRef>,
+pub struct Client<'a> {
+    inner: Arc<ClientRef<'a>>,
 }
 
 /// A `ClientBuilder` can be used to create a `Client` with custom configuration.
 #[must_use]
-pub struct ClientBuilder {
-    config: Config,
+pub struct ClientBuilder<'a> {
+    config: Config<'a>,
 }
 
 /// A `HttpVersionPref` is used to set the HTTP version preference.
@@ -77,11 +77,11 @@ pub enum HttpVersionPref {
     All,
 }
 
-struct Config {
+struct Config<'a> {
     // NOTE: When adding a new field, update `fmt::Debug for ClientBuilder`
     accepts: Accepts,
     headers: HeaderMap,
-    headers_order: Option<&'static [HeaderName]>,
+    headers_order: Option<&'a [HeaderName]>,
     connect_timeout: Option<Duration>,
     connection_verbose: bool,
     pool_idle_timeout: Option<Duration>,
@@ -94,6 +94,7 @@ struct Config {
     timeout: Option<Duration>,
     local_address_ipv6: Option<Ipv6Addr>,
     local_address_ipv4: Option<Ipv4Addr>,
+    http1_title_case_headers: bool,
     #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
     interface: Option<String>,
     nodelay: bool,
@@ -113,17 +114,17 @@ struct Config {
     tls: TlsConnectorBuilder,
 }
 
-impl Default for ClientBuilder {
+impl<'a> Default for ClientBuilder<'a> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ClientBuilder {
+impl<'a> ClientBuilder<'a> {
     /// Constructs a new `ClientBuilder`.
     ///
     /// This is the same as `Client::builder()`.
-    pub fn new() -> ClientBuilder {
+    pub fn new() -> ClientBuilder<'a> {
         ClientBuilder {
             config: Config {
                 error: None,
@@ -160,6 +161,7 @@ impl ClientBuilder {
                 tls_info: false,
                 #[cfg(feature = "boring-tls")]
                 tls: Default::default(),
+                http1_title_case_headers: true,
             },
         }
     }
@@ -170,7 +172,7 @@ impl ClientBuilder {
     ///
     /// This method fails if a TLS backend cannot be initialized, or the resolver
     /// cannot load the system configuration.
-    pub fn build(self) -> crate::Result<Client> {
+    pub fn build(self) -> crate::Result<Client<'a>> {
         let mut config = self.config;
 
         if let Some(err) = config.error {
@@ -178,6 +180,7 @@ impl ClientBuilder {
         }
 
         let mut proxies = config.proxies;
+
         if config.auto_sys_proxy {
             proxies.push(Proxy::system());
         }
@@ -245,8 +248,9 @@ impl ClientBuilder {
         config
             .builder
             .pool_idle_timeout(config.pool_idle_timeout)
-            .pool_max_idle_per_host(config.pool_max_idle_per_host);
-        
+            .pool_max_idle_per_host(config.pool_max_idle_per_host)
+            .http1_title_case_headers(config.http1_title_case_headers);
+
         Ok(Client {
             inner: Arc::new(ClientRef {
                 accepts: config.accepts,
@@ -267,26 +271,26 @@ impl ClientBuilder {
     /// Sets the necessary values to mimic the specified impersonate version.
     /// This will set the necessary headers and TLS settings.
     #[cfg(feature = "boring-tls")]
-    pub fn impersonate(self, impersonate: Impersonate) -> ClientBuilder {
+    pub fn impersonate(self, impersonate: Impersonate) -> ClientBuilder<'a> {
         self.configure_impersonate(impersonate, true)
     }
 
     /// Sets the necessary values to mimic the specified impersonate version (without headers).
     /// This will set the necessary headers and TLS settings.
     #[cfg(feature = "boring-tls")]
-    pub fn impersonate_without_headers(self, impersonate: Impersonate) -> ClientBuilder {
+    pub fn impersonate_without_headers(self, impersonate: Impersonate) -> ClientBuilder<'a> {
         self.configure_impersonate(impersonate, false)
     }
 
     /// Use the preconfigured TLS settings.
     #[cfg(feature = "boring-tls")]
-    pub fn use_preconfigured_tls(self, settings: ImpersonateSettings) -> ClientBuilder {
+    pub fn use_preconfigured_tls(self, settings: ImpersonateSettings) -> ClientBuilder<'a> {
         self.apply_tls_settings(settings, true)
     }
 
     /// Private helper to configure impersonation.
     #[cfg(feature = "boring-tls")]
-    fn configure_impersonate(self, impersonate: Impersonate, with_headers: bool) -> ClientBuilder {
+    fn configure_impersonate(self, impersonate: Impersonate, with_headers: bool) -> ClientBuilder<'a> {
         if let Ok(settings) = tls::tls_settings(impersonate) {
             return self.apply_tls_settings(settings, with_headers);
         }
@@ -299,7 +303,7 @@ impl ClientBuilder {
         mut self,
         settings: ImpersonateSettings,
         set_headers: bool,
-    ) -> ClientBuilder {
+    ) -> ClientBuilder<'a> {
         if set_headers {
             if let Some(headers) = settings.headers {
                 (headers)(&mut self.config.headers);
@@ -327,21 +331,21 @@ impl ClientBuilder {
 
     /// Enable Encrypted Client Hello (Secure SNI)
     #[cfg(feature = "boring-tls")]
-    pub fn enable_ech_grease(mut self) -> ClientBuilder {
+    pub fn enable_ech_grease(mut self) -> ClientBuilder<'a> {
         self.config.tls.enable_ech_grease();
         self
     }
 
     /// Enable TLS permute_extensions
     #[cfg(feature = "boring-tls")]
-    pub fn permute_extensions(mut self) -> ClientBuilder {
+    pub fn permute_extensions(mut self) -> ClientBuilder<'a> {
         self.config.tls.permute_extensions();
         self
     }
 
     /// Enable TLS pre_shared_key
     #[cfg(feature = "boring-tls")]
-    pub fn pre_shared_key(mut self) -> ClientBuilder {
+    pub fn pre_shared_key(mut self) -> ClientBuilder<'a> {
         self.config.tls.pre_shared_key();
         self
     }
@@ -368,7 +372,7 @@ impl ClientBuilder {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn user_agent<V>(mut self, value: V) -> ClientBuilder
+    pub fn user_agent<V>(mut self, value: V) -> ClientBuilder<'a>
     where
         V: TryInto<HeaderValue>,
         V::Error: Into<http::Error>,
@@ -428,7 +432,7 @@ impl ClientBuilder {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn default_headers(mut self, headers: HeaderMap) -> ClientBuilder {
+    pub fn default_headers(mut self, headers: HeaderMap) -> ClientBuilder<'a> {
         for (key, value) in headers.iter() {
             self.config.headers.insert(key, value.clone());
         }
@@ -441,13 +445,13 @@ impl ClientBuilder {
     ///
     /// The host header needs to be manually inserted if you want to modify its order.
     /// Otherwise it will be inserted by hyper after sorting.
-    pub fn headers_order(mut self, order: &'static [HeaderName]) -> ClientBuilder {
+    pub fn headers_order(mut self, order: &'a [HeaderName]) -> ClientBuilder<'a> {
         self.config.headers_order = Some(order);
         self
     }
 
     /// Default accpet
-    pub fn default_accpet(mut self) -> ClientBuilder {
+    pub fn default_accpet(mut self) -> ClientBuilder<'a> {
         self.config
             .headers
             .insert(ACCEPT, HeaderValue::from_static("*/*"));
@@ -466,7 +470,7 @@ impl ClientBuilder {
     /// This requires the optional `cookies` feature to be enabled.
     #[cfg(feature = "cookies")]
     #[cfg_attr(docsrs, doc(cfg(feature = "cookies")))]
-    pub fn cookie_store(mut self, enable: bool) -> ClientBuilder {
+    pub fn cookie_store(mut self, enable: bool) -> ClientBuilder<'a> {
         if enable {
             self.cookie_provider(Arc::new(cookie::Jar::default()))
         } else {
@@ -490,7 +494,7 @@ impl ClientBuilder {
     pub fn cookie_provider<C: cookie::CookieStore + 'static>(
         mut self,
         cookie_store: Arc<C>,
-    ) -> ClientBuilder {
+    ) -> ClientBuilder<'a> {
         self.config.cookie_store = Some(cookie_store as _);
         self
     }
@@ -513,7 +517,7 @@ impl ClientBuilder {
     /// This requires the optional `gzip` feature to be enabled
     #[cfg(feature = "gzip")]
     #[cfg_attr(docsrs, doc(cfg(feature = "gzip")))]
-    pub fn gzip(mut self, enable: bool) -> ClientBuilder {
+    pub fn gzip(mut self, enable: bool) -> ClientBuilder<'a> {
         self.config.accepts.gzip = enable;
         self
     }
@@ -536,7 +540,7 @@ impl ClientBuilder {
     /// This requires the optional `brotli` feature to be enabled
     #[cfg(feature = "brotli")]
     #[cfg_attr(docsrs, doc(cfg(feature = "brotli")))]
-    pub fn brotli(mut self, enable: bool) -> ClientBuilder {
+    pub fn brotli(mut self, enable: bool) -> ClientBuilder<'a> {
         self.config.accepts.brotli = enable;
         self
     }
@@ -559,7 +563,7 @@ impl ClientBuilder {
     /// This requires the optional `zstd` feature to be enabled
     #[cfg(feature = "zstd")]
     #[cfg_attr(docsrs, doc(cfg(feature = "zstd")))]
-    pub fn zstd(mut self, enable: bool) -> ClientBuilder {
+    pub fn zstd(mut self, enable: bool) -> ClientBuilder<'a> {
         self.config.accepts.zstd = enable;
         self
     }
@@ -582,7 +586,7 @@ impl ClientBuilder {
     /// This requires the optional `deflate` feature to be enabled
     #[cfg(feature = "deflate")]
     #[cfg_attr(docsrs, doc(cfg(feature = "deflate")))]
-    pub fn deflate(mut self, enable: bool) -> ClientBuilder {
+    pub fn deflate(mut self, enable: bool) -> ClientBuilder<'a> {
         self.config.accepts.deflate = enable;
         self
     }
@@ -592,7 +596,7 @@ impl ClientBuilder {
     /// This method exists even if the optional `zstd` feature is not enabled.
     /// This can be used to ensure a `Client` doesn't use zstd decompression
     /// even if another dependency were to enable the optional `zstd` feature.
-    pub fn no_zstd(self) -> ClientBuilder {
+    pub fn no_zstd(self) -> ClientBuilder<'a> {
         #[cfg(feature = "zstd")]
         {
             self.zstd(false)
@@ -609,7 +613,7 @@ impl ClientBuilder {
     /// This method exists even if the optional `gzip` feature is not enabled.
     /// This can be used to ensure a `Client` doesn't use gzip decompression
     /// even if another dependency were to enable the optional `gzip` feature.
-    pub fn no_gzip(self) -> ClientBuilder {
+    pub fn no_gzip(self) -> ClientBuilder<'a> {
         #[cfg(feature = "gzip")]
         {
             self.gzip(false)
@@ -626,7 +630,7 @@ impl ClientBuilder {
     /// This method exists even if the optional `brotli` feature is not enabled.
     /// This can be used to ensure a `Client` doesn't use brotli decompression
     /// even if another dependency were to enable the optional `brotli` feature.
-    pub fn no_brotli(self) -> ClientBuilder {
+    pub fn no_brotli(self) -> ClientBuilder<'a> {
         #[cfg(feature = "brotli")]
         {
             self.brotli(false)
@@ -643,7 +647,7 @@ impl ClientBuilder {
     /// This method exists even if the optional `deflate` feature is not enabled.
     /// This can be used to ensure a `Client` doesn't use deflate decompression
     /// even if another dependency were to enable the optional `deflate` feature.
-    pub fn no_deflate(self) -> ClientBuilder {
+    pub fn no_deflate(self) -> ClientBuilder<'a> {
         #[cfg(feature = "deflate")]
         {
             self.deflate(false)
@@ -660,7 +664,7 @@ impl ClientBuilder {
     /// Set a `RedirectPolicy` for this client.
     ///
     /// Default will follow redirects up to a maximum of 10.
-    pub fn redirect(mut self, policy: redirect::Policy) -> ClientBuilder {
+    pub fn redirect(mut self, policy: redirect::Policy) -> ClientBuilder<'a> {
         self.config.redirect_policy = policy;
         self
     }
@@ -668,7 +672,7 @@ impl ClientBuilder {
     /// Enable or disable automatic setting of the `Referer` header.
     ///
     /// Default is `true`.
-    pub fn referer(mut self, enable: bool) -> ClientBuilder {
+    pub fn referer(mut self, enable: bool) -> ClientBuilder<'a> {
         self.config.referer = enable;
         self
     }
@@ -680,7 +684,7 @@ impl ClientBuilder {
     /// # Note
     ///
     /// Adding a proxy will disable the automatic usage of the "system" proxy.
-    pub fn proxy(mut self, proxy: Proxy) -> ClientBuilder {
+    pub fn proxy(mut self, proxy: Proxy) -> ClientBuilder<'a> {
         self.config.proxies.push(proxy);
         self.config.auto_sys_proxy = false;
         self
@@ -693,7 +697,7 @@ impl ClientBuilder {
     /// on all desired proxies instead.
     ///
     /// This also disables the automatic usage of the "system" proxy.
-    pub fn no_proxy(mut self) -> ClientBuilder {
+    pub fn no_proxy(mut self) -> ClientBuilder<'a> {
         self.config.proxies.clear();
         self.config.auto_sys_proxy = false;
         self
@@ -707,7 +711,7 @@ impl ClientBuilder {
     /// response body has finished.
     ///
     /// Default is no timeout.
-    pub fn timeout(mut self, timeout: Duration) -> ClientBuilder {
+    pub fn timeout(mut self, timeout: Duration) -> ClientBuilder<'a> {
         self.config.timeout = Some(timeout);
         self
     }
@@ -720,7 +724,7 @@ impl ClientBuilder {
     ///
     /// This **requires** the futures be executed in a tokio runtime with
     /// a tokio timer enabled.
-    pub fn connect_timeout(mut self, timeout: Duration) -> ClientBuilder {
+    pub fn connect_timeout(mut self, timeout: Duration) -> ClientBuilder<'a> {
         self.config.connect_timeout = Some(timeout);
         self
     }
@@ -731,7 +735,7 @@ impl ClientBuilder {
     /// for read and write operations on connections.
     ///
     /// [log]: https://crates.io/crates/log
-    pub fn connection_verbose(mut self, verbose: bool) -> ClientBuilder {
+    pub fn connection_verbose(mut self, verbose: bool) -> ClientBuilder<'a> {
         self.config.connection_verbose = verbose;
         self
     }
@@ -743,7 +747,7 @@ impl ClientBuilder {
     /// Pass `None` to disable timeout.
     ///
     /// Default is 90 seconds.
-    pub fn pool_idle_timeout<D>(mut self, val: D) -> ClientBuilder
+    pub fn pool_idle_timeout<D>(mut self, val: D) -> ClientBuilder<'a>
     where
         D: Into<Option<Duration>>,
     {
@@ -752,20 +756,14 @@ impl ClientBuilder {
     }
 
     /// Sets the maximum idle connection per host allowed in the pool.
-    pub fn pool_max_idle_per_host(mut self, max: usize) -> ClientBuilder {
+    pub fn pool_max_idle_per_host(mut self, max: usize) -> ClientBuilder<'a> {
         self.config.pool_max_idle_per_host = max;
         self
     }
 
     /// Send headers as title case instead of lowercase.
-    pub fn http1_title_case_headers(mut self) -> ClientBuilder {
-        self.config.builder.http1_title_case_headers(true);
-        self
-    }
-
-    /// Send headers as preserve case instead of lowercase.
-    pub fn http1_preserve_header_case(mut self, enabled: bool) -> ClientBuilder {
-        self.config.builder.http1_preserve_header_case(true);
+    pub fn http1_title_case_headers(mut self, enabled: bool) -> ClientBuilder<'a> {
+        self.config.http1_title_case_headers = enabled;
         self
     }
 
@@ -777,7 +775,7 @@ impl ClientBuilder {
     pub fn http1_allow_obsolete_multiline_headers_in_responses(
         mut self,
         value: bool,
-    ) -> ClientBuilder {
+    ) -> ClientBuilder<'a> {
         self.config
             .builder
             .http1_allow_obsolete_multiline_headers_in_responses(value);
@@ -785,7 +783,7 @@ impl ClientBuilder {
     }
 
     /// Sets whether invalid header lines should be silently ignored in HTTP/1 responses.
-    pub fn http1_ignore_invalid_headers_in_responses(mut self, value: bool) -> ClientBuilder {
+    pub fn http1_ignore_invalid_headers_in_responses(mut self, value: bool) -> ClientBuilder<'a> {
         self.config
             .builder
             .http1_ignore_invalid_headers_in_responses(value);
@@ -800,7 +798,7 @@ impl ClientBuilder {
     pub fn http1_allow_spaces_after_header_name_in_responses(
         mut self,
         value: bool,
-    ) -> ClientBuilder {
+    ) -> ClientBuilder<'a> {
         self.config
             .builder
             .http1_allow_spaces_after_header_name_in_responses(value);
@@ -809,7 +807,7 @@ impl ClientBuilder {
 
     /// Only use HTTP/1.
     /// Default is Http/1.
-    pub fn http1_only(mut self) -> ClientBuilder {
+    pub fn http1_only(mut self) -> ClientBuilder<'a> {
         #[cfg(feature = "boring-tls")]
         {
             self.config.tls.http_version_pref(HttpVersionPref::Http1);
@@ -820,13 +818,13 @@ impl ClientBuilder {
     }
 
     /// Allow HTTP/0.9 responses
-    pub fn http09_responses(mut self) -> ClientBuilder {
+    pub fn http09_responses(mut self) -> ClientBuilder<'a> {
         self.config.builder.http09_responses(true);
         self
     }
 
     /// Only use HTTP/2.
-    pub fn http2_only(mut self) -> ClientBuilder {
+    pub fn http2_only(mut self) -> ClientBuilder<'a> {
         #[cfg(feature = "boring-tls")]
         {
             self.config.tls.http_version_pref(HttpVersionPref::Http2);
@@ -839,7 +837,7 @@ impl ClientBuilder {
     /// Sets the `SETTINGS_INITIAL_WINDOW_SIZE` option for HTTP2 stream-level flow control.
     ///
     /// Default is currently 65,535 but may change internally to optimize for common uses.
-    pub fn http2_initial_stream_window_size(mut self, sz: impl Into<Option<u32>>) -> ClientBuilder {
+    pub fn http2_initial_stream_window_size(mut self, sz: impl Into<Option<u32>>) -> ClientBuilder<'a> {
         self.config
             .builder
             .http2_initial_stream_window_size(sz.into());
@@ -852,7 +850,7 @@ impl ClientBuilder {
     pub fn http2_initial_connection_window_size(
         mut self,
         sz: impl Into<Option<u32>>,
-    ) -> ClientBuilder {
+    ) -> ClientBuilder<'a> {
         self.config
             .builder
             .http2_initial_connection_window_size(sz.into());
@@ -863,7 +861,7 @@ impl ClientBuilder {
     ///
     /// Enabling this will override the limits set in `http2_initial_stream_window_size` and
     /// `http2_initial_connection_window_size`.
-    pub fn http2_adaptive_window(mut self, enabled: bool) -> ClientBuilder {
+    pub fn http2_adaptive_window(mut self, enabled: bool) -> ClientBuilder<'a> {
         self.config.builder.http2_adaptive_window(enabled);
         self
     }
@@ -871,7 +869,7 @@ impl ClientBuilder {
     /// Sets the maximum frame size to use for HTTP2.
     ///
     /// Default is currently 16,384 but may change internally to optimize for common uses.
-    pub fn http2_max_frame_size(mut self, sz: impl Into<Option<u32>>) -> ClientBuilder {
+    pub fn http2_max_frame_size(mut self, sz: impl Into<Option<u32>>) -> ClientBuilder<'a> {
         self.config.builder.http2_max_frame_size(sz.into());
         self
     }
@@ -879,7 +877,7 @@ impl ClientBuilder {
     /// Sets the maximum concurrent streams to use for HTTP2.
     ///
     /// Passing `None` will do nothing.
-    pub fn http2_max_concurrent_streams(mut self, sz: impl Into<Option<u32>>) -> ClientBuilder {
+    pub fn http2_max_concurrent_streams(mut self, sz: impl Into<Option<u32>>) -> ClientBuilder<'a> {
         if let Some(max) = sz.into() {
             self.config.builder.http2_max_concurrent_streams(max);
         }
@@ -889,7 +887,7 @@ impl ClientBuilder {
     /// Sets the max header list size to use for HTTP2.
     ///
     /// Passing `None` will do nothing.
-    pub fn http2_max_header_list_size(mut self, sz: impl Into<Option<u32>>) -> ClientBuilder {
+    pub fn http2_max_header_list_size(mut self, sz: impl Into<Option<u32>>) -> ClientBuilder<'a> {
         if let Some(sz) = sz.into() {
             self.config.builder.http2_max_header_list_size(sz);
         }
@@ -899,7 +897,7 @@ impl ClientBuilder {
     /// Enables and disables the push feature for HTTP2.
     ///
     /// Passing `None` will do nothing.
-    pub fn http2_enable_push(mut self, sz: impl Into<Option<bool>>) -> ClientBuilder {
+    pub fn http2_enable_push(mut self, sz: impl Into<Option<bool>>) -> ClientBuilder<'a> {
         if let Some(sz) = sz.into() {
             self.config.builder.http2_enable_push(sz);
         }
@@ -907,7 +905,7 @@ impl ClientBuilder {
     }
 
     /// Http2 unknown_setting8
-    pub fn http2_unknown_setting8(mut self, sz: impl Into<Option<bool>>) -> ClientBuilder {
+    pub fn http2_unknown_setting8(mut self, sz: impl Into<Option<bool>>) -> ClientBuilder<'a> {
         if let Some(sz) = sz.into() {
             self.config.builder.http2_unknown_setting8(sz);
         }
@@ -915,7 +913,7 @@ impl ClientBuilder {
     }
 
     /// Http2 unknown_setting9
-    pub fn http2_unknown_setting9(mut self, sz: impl Into<Option<bool>>) -> ClientBuilder {
+    pub fn http2_unknown_setting9(mut self, sz: impl Into<Option<bool>>) -> ClientBuilder<'a> {
         if let Some(sz) = sz.into() {
             self.config.builder.http2_unknown_setting9(sz);
         }
@@ -925,7 +923,7 @@ impl ClientBuilder {
     /// Sets the header table size to use for HTTP2.
     ///
     /// Passing `None` will do nothing.
-    pub fn http2_header_table_size(mut self, sz: impl Into<Option<u32>>) -> ClientBuilder {
+    pub fn http2_header_table_size(mut self, sz: impl Into<Option<u32>>) -> ClientBuilder<'a> {
         if let Some(sz) = sz.into() {
             self.config.builder.http2_header_table_size(sz);
         }
@@ -939,7 +937,7 @@ impl ClientBuilder {
     pub fn http2_headers_pseudo_order(
         mut self,
         order: impl Into<Option<[PseudoOrder; 4]>>,
-    ) -> ClientBuilder {
+    ) -> ClientBuilder<'a> {
         self.config.builder.http2_headers_pseudo_order(order.into());
         self
     }
@@ -950,7 +948,7 @@ impl ClientBuilder {
     pub fn http2_headers_priority(
         mut self,
         priority: impl Into<Option<StreamDependency>>,
-    ) -> ClientBuilder {
+    ) -> ClientBuilder<'a> {
         self.config.builder.http2_headers_priority(priority.into());
         self
     }
@@ -962,7 +960,7 @@ impl ClientBuilder {
     pub fn http2_settings_order(
         mut self,
         order: impl Into<Option<&'static [SettingsOrder]>>,
-    ) -> ClientBuilder {
+    ) -> ClientBuilder<'a> {
         self.config.builder.http2_settings_order(order.into());
         self
     }
@@ -974,7 +972,7 @@ impl ClientBuilder {
     pub fn http2_keep_alive_interval(
         mut self,
         interval: impl Into<Option<Duration>>,
-    ) -> ClientBuilder {
+    ) -> ClientBuilder<'a> {
         self.config
             .builder
             .http2_keep_alive_interval(interval.into());
@@ -986,7 +984,7 @@ impl ClientBuilder {
     /// If the ping is not acknowledged within the timeout, the connection will be closed.
     /// Does nothing if `http2_keep_alive_interval` is disabled.
     /// Default is currently disabled.
-    pub fn http2_keep_alive_timeout(mut self, timeout: Duration) -> ClientBuilder {
+    pub fn http2_keep_alive_timeout(mut self, timeout: Duration) -> ClientBuilder<'a> {
         self.config.builder.http2_keep_alive_timeout(timeout);
         self
     }
@@ -997,7 +995,7 @@ impl ClientBuilder {
     /// If enabled, pings are also sent when no streams are active.
     /// Does nothing if `http2_keep_alive_interval` is disabled.
     /// Default is `false`.
-    pub fn http2_keep_alive_while_idle(mut self, enabled: bool) -> ClientBuilder {
+    pub fn http2_keep_alive_while_idle(mut self, enabled: bool) -> ClientBuilder<'a> {
         self.config.builder.http2_keep_alive_while_idle(enabled);
         self
     }
@@ -1007,7 +1005,7 @@ impl ClientBuilder {
     /// Set whether sockets have `TCP_NODELAY` enabled.
     ///
     /// Default is `true`.
-    pub fn tcp_nodelay(mut self, enabled: bool) -> ClientBuilder {
+    pub fn tcp_nodelay(mut self, enabled: bool) -> ClientBuilder<'a> {
         self.config.nodelay = enabled;
         self
     }
@@ -1023,7 +1021,7 @@ impl ClientBuilder {
     ///     .local_address(local_addr)
     ///     .build().unwrap();
     /// ```
-    pub fn local_address<T>(mut self, addr: T) -> ClientBuilder
+    pub fn local_address<T>(mut self, addr: T) -> ClientBuilder<'a>
     where
         T: Into<Option<IpAddr>>,
     {
@@ -1041,7 +1039,7 @@ impl ClientBuilder {
 
     /// Set that all sockets are bound to the configured IPv4 or IPv6 address (depending on host's
     /// preferences) before connection.
-    pub fn local_addresses(mut self, addr_ipv4: Ipv4Addr, addr_ipv6: Ipv6Addr) -> ClientBuilder {
+    pub fn local_addresses(mut self, addr_ipv4: Ipv4Addr, addr_ipv6: Ipv6Addr) -> ClientBuilder<'a> {
         self.config.local_address_ipv4 = Some(addr_ipv4);
         self.config.local_address_ipv6 = Some(addr_ipv6);
         self
@@ -1058,7 +1056,7 @@ impl ClientBuilder {
     ///     .build().unwrap();
     /// ```
     #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
-    pub fn interface(mut self, interface: &str) -> ClientBuilder {
+    pub fn interface(mut self, interface: &str) -> ClientBuilder<'a> {
         self.config.interface = Some(interface.to_string());
         self
     }
@@ -1066,7 +1064,7 @@ impl ClientBuilder {
     /// Set that all sockets have `SO_KEEPALIVE` set with the supplied duration.
     ///
     /// If `None`, the option will not be set.
-    pub fn tcp_keepalive<D>(mut self, val: D) -> ClientBuilder
+    pub fn tcp_keepalive<D>(mut self, val: D) -> ClientBuilder<'a>
     where
         D: Into<Option<Duration>>,
     {
@@ -1090,7 +1088,7 @@ impl ClientBuilder {
     ///
     /// feature to be enabled.
     #[cfg(feature = "boring-tls")]
-    pub fn danger_accept_invalid_certs(mut self, accept_invalid_certs: bool) -> ClientBuilder {
+    pub fn danger_accept_invalid_certs(mut self, accept_invalid_certs: bool) -> ClientBuilder<'a> {
         self.config.tls.certs_verification = !accept_invalid_certs;
         self
     }
@@ -1103,7 +1101,7 @@ impl ClientBuilder {
     ///
     /// feature to be enabled.
     #[cfg(feature = "boring-tls")]
-    pub fn tls_sni(mut self, tls_sni: bool) -> ClientBuilder {
+    pub fn tls_sni(mut self, tls_sni: bool) -> ClientBuilder<'a> {
         self.config.tls.tls_sni(tls_sni);
         self
     }
@@ -1123,7 +1121,7 @@ impl ClientBuilder {
     ///
     /// feature to be enabled.
     #[cfg(feature = "boring-tls")]
-    pub fn min_tls_version(mut self, version: tls::Version) -> ClientBuilder {
+    pub fn min_tls_version(mut self, version: tls::Version) -> ClientBuilder<'a> {
         self.config.tls.min_tls_version(version);
         self
     }
@@ -1143,7 +1141,7 @@ impl ClientBuilder {
     ///
     /// feature to be enabled.
     #[cfg(feature = "boring-tls")]
-    pub fn max_tls_version(mut self, version: tls::Version) -> ClientBuilder {
+    pub fn max_tls_version(mut self, version: tls::Version) -> ClientBuilder<'a> {
         self.config.tls.max_tls_version(version);
         self
     }
@@ -1154,7 +1152,7 @@ impl ClientBuilder {
     ///
     /// feature to be enabled.
     #[cfg(feature = "boring-tls")]
-    pub fn tls_info(mut self, tls_info: bool) -> ClientBuilder {
+    pub fn tls_info(mut self, tls_info: bool) -> ClientBuilder<'a> {
         self.config.tls_info = tls_info;
         self
     }
@@ -1162,14 +1160,14 @@ impl ClientBuilder {
     /// Restrict the Client to be used with HTTPS only requests.
     ///
     /// Defaults to false.
-    pub fn https_only(mut self, enabled: bool) -> ClientBuilder {
+    pub fn https_only(mut self, enabled: bool) -> ClientBuilder<'a> {
         self.config.https_only = enabled;
         self
     }
 
     /// Set CA certificate store.
     #[cfg(feature = "boring-tls")]
-    pub fn ca_cert_store<F>(mut self, store: F) -> ClientBuilder
+    pub fn ca_cert_store<F>(mut self, store: F) -> ClientBuilder<'a>
     where
         F: Fn() -> Result<X509Store, ErrorStack> + Send + Sync + 'static,
     {
@@ -1186,7 +1184,7 @@ impl ClientBuilder {
     /// Requires the `hickory-dns` feature to be enabled.
     #[cfg(feature = "hickory-dns")]
     #[cfg_attr(docsrs, doc(cfg(feature = "hickory-dns")))]
-    pub fn hickory_dns_strategy(mut self, strategy: LookupIpStrategy) -> ClientBuilder {
+    pub fn hickory_dns_strategy(mut self, strategy: LookupIpStrategy) -> ClientBuilder<'a> {
         self.config.dns_strategy = Some(strategy);
         self
     }
@@ -1198,7 +1196,7 @@ impl ClientBuilder {
     /// even if another dependency were to enable the optional `hickory-dns` feature.
     #[cfg(feature = "hickory-dns")]
     #[cfg_attr(docsrs, doc(cfg(feature = "hickory-dns")))]
-    pub fn no_hickory_dns(mut self) -> ClientBuilder {
+    pub fn no_hickory_dns(mut self) -> ClientBuilder<'a> {
         self.config.hickory_dns = false;
         self
     }
@@ -1211,7 +1209,7 @@ impl ClientBuilder {
     /// traffic to a particular port you must include this port in the URL
     /// itself, any port in the overridden addr will be ignored and traffic sent
     /// to the conventional port for the given scheme (e.g. 80 for http).
-    pub fn resolve(self, domain: &str, addr: SocketAddr) -> ClientBuilder {
+    pub fn resolve(self, domain: &str, addr: SocketAddr) -> ClientBuilder<'a> {
         self.resolve_to_addrs(domain, &[addr])
     }
 
@@ -1223,7 +1221,7 @@ impl ClientBuilder {
     /// traffic to a particular port you must include this port in the URL
     /// itself, any port in the overridden addresses will be ignored and traffic sent
     /// to the conventional port for the given scheme (e.g. 80 for http).
-    pub fn resolve_to_addrs(mut self, domain: &str, addrs: &[SocketAddr]) -> ClientBuilder {
+    pub fn resolve_to_addrs(mut self, domain: &str, addrs: &[SocketAddr]) -> ClientBuilder<'a> {
         self.config
             .dns_overrides
             .insert(domain.to_string(), addrs.to_vec());
@@ -1235,7 +1233,7 @@ impl ClientBuilder {
     /// Pass an `Arc` wrapping a trait object implementing `Resolve`.
     /// Overrides for specific names passed to `resolve` and `resolve_to_addrs` will
     /// still be applied on top of this resolver.
-    pub fn dns_resolver<R: Resolve + 'static>(mut self, resolver: Arc<R>) -> ClientBuilder {
+    pub fn dns_resolver<R: Resolve + 'static>(mut self, resolver: Arc<R>) -> ClientBuilder<'a> {
         self.config.dns_resolver = Some(resolver as _);
         self
     }
@@ -1243,13 +1241,13 @@ impl ClientBuilder {
 
 type HyperClient = hyper::Client<Connector, super::body::ImplStream>;
 
-impl Default for Client {
+impl<'a> Default for Client<'a> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Client {
+impl<'a> Client<'a> {
     /// Constructs a new `Client`.
     ///
     /// # Panics
@@ -1259,14 +1257,14 @@ impl Client {
     ///
     /// Use `Client::builder()` if you wish to handle the failure as an `Error`
     /// instead of panicking.
-    pub fn new() -> Client {
+    pub fn new() -> Client<'a> {
         ClientBuilder::new().build().expect("Client::new()")
     }
 
     /// Create a `ClientBuilder` specifically configured for WebSocket connections.
     ///
     /// This method configures the `ClientBuilder` to use HTTP/1.0 only, which is required for certain WebSocket connections.
-    pub fn builder() -> ClientBuilder {
+    pub fn builder() -> ClientBuilder<'a> {
         ClientBuilder::new()
     }
 
@@ -1361,11 +1359,11 @@ impl Client {
     pub fn execute(
         &self,
         request: Request,
-    ) -> impl Future<Output = Result<Response, crate::Error>> {
+    ) -> impl Future<Output = Result<Response, crate::Error>> + '_ {
         self.execute_request(request)
     }
 
-    pub(super) fn execute_request(&self, req: Request) -> Pending {
+    pub(super) fn execute_request(&self, req: Request) -> Pending<'a> {
         let (method, url, mut headers, body, timeout, version) = req.pieces();
         if url.scheme() != "http"
             && url.scheme() != "https"
@@ -1592,7 +1590,7 @@ impl Client {
     }
 }
 
-impl fmt::Debug for Client {
+impl fmt::Debug for Client<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut builder = f.debug_struct("Client");
         self.inner.fmt_fields(&mut builder);
@@ -1600,10 +1598,10 @@ impl fmt::Debug for Client {
     }
 }
 
-impl tower_service::Service<Request> for Client {
+impl<'a> tower_service::Service<Request> for Client<'a> {
     type Response = Response;
     type Error = crate::Error;
-    type Future = Pending;
+    type Future = Pending<'a>;
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
@@ -1614,10 +1612,10 @@ impl tower_service::Service<Request> for Client {
     }
 }
 
-impl tower_service::Service<Request> for &'_ Client {
+impl<'a> tower_service::Service<Request> for &'_ Client<'a> {
     type Response = Response;
     type Error = crate::Error;
-    type Future = Pending;
+    type Future = Pending<'a>;
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
@@ -1628,7 +1626,7 @@ impl tower_service::Service<Request> for &'_ Client {
     }
 }
 
-impl fmt::Debug for ClientBuilder {
+impl<'a> fmt::Debug for ClientBuilder<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut builder = f.debug_struct("ClientBuilder");
         self.config.fmt_fields(&mut builder);
@@ -1636,7 +1634,7 @@ impl fmt::Debug for ClientBuilder {
     }
 }
 
-impl Config {
+impl<'a> Config<'a> {
     fn fmt_fields(&self, f: &mut fmt::DebugStruct<'_, '_>) {
         // Instead of deriving Debug, only print fields when their output
         // would provide relevant or interesting data.
@@ -1706,12 +1704,12 @@ impl Config {
 }
 
 #[derive(Clone)]
-struct ClientRef {
+struct ClientRef<'a> {
     accepts: Accepts,
     #[cfg(feature = "cookies")]
     cookie_store: Option<Arc<dyn cookie::CookieStore>>,
     headers: HeaderMap,
-    headers_order: Option<&'static [HeaderName]>,
+    headers_order: Option<&'a [HeaderName]>,
     hyper: HyperClient,
     redirect_policy: Arc<redirect::Policy>,
     referer: bool,
@@ -1720,7 +1718,7 @@ struct ClientRef {
     https_only: bool,
 }
 
-impl ClientRef {
+impl<'a> ClientRef<'a> {
     fn fmt_fields(&self, f: &mut fmt::DebugStruct<'_, '_>) {
         // Instead of deriving Debug, only print fields when their output
         // would provide relevant or interesting data.
@@ -1756,19 +1754,19 @@ impl ClientRef {
 }
 
 pin_project! {
-    pub struct Pending {
+    pub struct Pending<'a> {
         #[pin]
-        inner: PendingInner,
+        inner: PendingInner<'a>,
     }
 }
 
-enum PendingInner {
-    Request(PendingRequest),
+enum PendingInner<'a> {
+    Request(PendingRequest<'a>),
     Error(Option<crate::Error>),
 }
 
 pin_project! {
-    struct PendingRequest {
+    struct PendingRequest<'a> {
         method: Method,
         url: Url,
         headers: HeaderMap,
@@ -1778,7 +1776,7 @@ pin_project! {
 
         retry_count: usize,
 
-        client: Arc<ClientRef>,
+        client: Arc<ClientRef<'a>>,
 
         #[pin]
         in_flight: ResponseFuture,
@@ -1791,7 +1789,7 @@ enum ResponseFuture {
     Default(HyperResponseFuture),
 }
 
-impl PendingRequest {
+impl<'a> PendingRequest<'a> {
     fn in_flight(self: Pin<&mut Self>) -> Pin<&mut ResponseFuture> {
         self.project().in_flight
     }
@@ -1850,29 +1848,29 @@ impl PendingRequest {
 
 fn is_retryable_error(err: &(dyn std::error::Error + 'static)) -> bool {
     if let Some(cause) = err.source() {
-        if let Some(err) = cause.downcast_ref::<h2::Error>() {
+        if let Some(err) = cause.downcast_ref::<hyper::h2::Error>() {
             // They sent us a graceful shutdown, try with a new connection!
             return err.is_go_away()
                 && err.is_remote()
-                && err.reason() == Some(h2::Reason::NO_ERROR);
+                && err.reason() == Some(hyper::h2::Reason::NO_ERROR);
         }
     }
     false
 }
 
-impl Pending {
-    pub(super) fn new_err(err: crate::Error) -> Pending {
+impl<'a> Pending<'a> {
+    pub(super) fn new_err(err: crate::Error) -> Pending<'a> {
         Pending {
             inner: PendingInner::Error(Some(err)),
         }
     }
 
-    fn inner(self: Pin<&mut Self>) -> Pin<&mut PendingInner> {
+    fn inner(self: Pin<&mut Self>) -> Pin<&mut PendingInner<'a>> {
         self.project().inner
     }
 }
 
-impl Future for Pending {
+impl<'a> Future for Pending<'a> {
     type Output = Result<Response, crate::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -1886,7 +1884,7 @@ impl Future for Pending {
     }
 }
 
-impl Future for PendingRequest {
+impl<'a> Future for PendingRequest<'a> {
     type Output = Result<Response, crate::Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -2061,7 +2059,7 @@ impl Future for PendingRequest {
     }
 }
 
-impl fmt::Debug for Pending {
+impl<'a> fmt::Debug for Pending<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.inner {
             PendingInner::Request(ref req) => f

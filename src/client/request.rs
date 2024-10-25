@@ -1,6 +1,5 @@
 use std::convert::TryFrom;
 use std::fmt;
-use std::future::Future;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -11,7 +10,6 @@ use super::body::Body;
 use super::http::{Client, Pending};
 #[cfg(feature = "multipart")]
 use super::multipart;
-use super::response::Response;
 #[cfg(feature = "multipart")]
 use crate::header::CONTENT_LENGTH;
 use crate::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
@@ -32,8 +30,8 @@ pub struct Request {
 ///
 /// To construct a `RequestBuilder`, refer to the `Client` documentation.
 #[must_use = "RequestBuilder does nothing until you 'send' it"]
-pub struct RequestBuilder {
-    client: Client,
+pub struct RequestBuilder<'a> {
+    client: Client<'a>,
     request: crate::Result<Request>,
 }
 
@@ -160,7 +158,7 @@ impl Request {
     }
 }
 
-impl RequestBuilder {
+impl<'a> RequestBuilder<'a> {
     pub(super) fn new(client: Client, request: crate::Result<Request>) -> RequestBuilder {
         let mut builder = RequestBuilder { client, request };
 
@@ -186,7 +184,7 @@ impl RequestBuilder {
     }
 
     /// Add a `Header` to this Request.
-    pub fn header<K, V>(self, key: K, value: V) -> RequestBuilder
+    pub fn header<K, V>(self, key: K, value: V) -> RequestBuilder<'a>
     where
         HeaderName: TryFrom<K>,
         <HeaderName as TryFrom<K>>::Error: Into<http::Error>,
@@ -197,7 +195,7 @@ impl RequestBuilder {
     }
 
     /// Add a `Header` to this Request with ability to define if `header_value` is sensitive.
-    fn header_sensitive<K, V>(mut self, key: K, value: V, sensitive: bool) -> RequestBuilder
+    fn header_sensitive<K, V>(mut self, key: K, value: V, sensitive: bool) -> RequestBuilder<'a>
     where
         HeaderName: TryFrom<K>,
         <HeaderName as TryFrom<K>>::Error: Into<http::Error>,
@@ -231,7 +229,7 @@ impl RequestBuilder {
     /// Add a set of Headers to the existing ones on this Request.
     ///
     /// The headers will be merged in to any already set.
-    pub fn headers(mut self, headers: crate::header::HeaderMap) -> RequestBuilder {
+    pub fn headers(mut self, headers: crate::header::HeaderMap) -> RequestBuilder<'a> {
         if let Ok(ref mut req) = self.request {
             crate::util::replace_headers(req.headers_mut(), headers);
         }
@@ -252,7 +250,7 @@ impl RequestBuilder {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn basic_auth<U, P>(self, username: U, password: Option<P>) -> RequestBuilder
+    pub fn basic_auth<U, P>(self, username: U, password: Option<P>) -> RequestBuilder<'a>
     where
         U: fmt::Display,
         P: fmt::Display,
@@ -262,7 +260,7 @@ impl RequestBuilder {
     }
 
     /// Enable HTTP bearer authentication.
-    pub fn bearer_auth<T>(self, token: T) -> RequestBuilder
+    pub fn bearer_auth<T>(self, token: T) -> RequestBuilder<'a>
     where
         T: fmt::Display,
     {
@@ -271,7 +269,7 @@ impl RequestBuilder {
     }
 
     /// Set the request body.
-    pub fn body<T: Into<Body>>(mut self, body: T) -> RequestBuilder {
+    pub fn body<T: Into<Body>>(mut self, body: T) -> RequestBuilder<'a> {
         if let Ok(ref mut req) = self.request {
             *req.body_mut() = Some(body.into());
         }
@@ -283,7 +281,7 @@ impl RequestBuilder {
     /// The timeout is applied from when the request starts connecting until the
     /// response body has finished. It affects only this request and overrides
     /// the timeout configured using `ClientBuilder::timeout()`.
-    pub fn timeout(mut self, timeout: Duration) -> RequestBuilder {
+    pub fn timeout(mut self, timeout: Duration) -> RequestBuilder<'a> {
         if let Ok(ref mut req) = self.request {
             *req.timeout_mut() = Some(timeout);
         }
@@ -311,7 +309,7 @@ impl RequestBuilder {
     /// ```
     #[cfg(feature = "multipart")]
     #[cfg_attr(docsrs, doc(cfg(feature = "multipart")))]
-    pub fn multipart(self, mut multipart: multipart::Form) -> RequestBuilder {
+    pub fn multipart(self, mut multipart: multipart::Form) -> RequestBuilder<'a> {
         let mut builder = self.header(
             CONTENT_TYPE,
             format!("multipart/form-data; boundary={}", multipart.boundary()).as_str(),
@@ -346,7 +344,7 @@ impl RequestBuilder {
     /// # Errors
     /// This method will fail if the object you provide cannot be serialized
     /// into a query string.
-    pub fn query<T: Serialize + ?Sized>(mut self, query: &T) -> RequestBuilder {
+    pub fn query<T: Serialize + ?Sized>(mut self, query: &T) -> RequestBuilder<'a> {
         let mut error = None;
         if let Ok(ref mut req) = self.request {
             let url = req.url_mut();
@@ -369,7 +367,7 @@ impl RequestBuilder {
     }
 
     /// Set HTTP version
-    pub fn version(mut self, version: Version) -> RequestBuilder {
+    pub fn version(mut self, version: Version) -> RequestBuilder<'a> {
         if let Ok(ref mut req) = self.request {
             req.version = version;
         }
@@ -403,7 +401,7 @@ impl RequestBuilder {
     ///
     /// This method fails if the passed value cannot be serialized into
     /// url encoded format
-    pub fn form<T: Serialize + ?Sized>(mut self, form: &T) -> RequestBuilder {
+    pub fn form<T: Serialize + ?Sized>(mut self, form: &T) -> RequestBuilder<'a> {
         let mut error = None;
         if let Ok(ref mut req) = self.request {
             match serde_urlencoded::to_string(form) {
@@ -435,7 +433,7 @@ impl RequestBuilder {
     /// fail, or if `T` contains a map with non-string keys.
     #[cfg(feature = "json")]
     #[cfg_attr(docsrs, doc(cfg(feature = "json")))]
-    pub fn json<T: Serialize + ?Sized>(mut self, json: &T) -> RequestBuilder {
+    pub fn json<T: Serialize + ?Sized>(mut self, json: &T) -> RequestBuilder<'a> {
         let mut error = None;
         if let Ok(ref mut req) = self.request {
             match serde_json::to_vec(json) {
@@ -464,7 +462,7 @@ impl RequestBuilder {
     /// The [request mode][mdn] will be set to 'no-cors'.
     ///
     /// [mdn]: https://developer.mozilla.org/en-US/docs/Web/API/Request/mode
-    pub fn fetch_mode_no_cors(self) -> RequestBuilder {
+    pub fn fetch_mode_no_cors(self) -> RequestBuilder<'a> {
         self
     }
 
@@ -479,7 +477,7 @@ impl RequestBuilder {
     ///
     /// This is similar to [`RequestBuilder::build()`], but also returns the
     /// embedded `Client`.
-    pub fn build_split(self) -> (Client, crate::Result<Request>) {
+    pub fn build_split(self) -> (Client<'a>, crate::Result<Request>) {
         (self.client, self.request)
     }
 
@@ -504,7 +502,7 @@ impl RequestBuilder {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn send(self) -> impl Future<Output = Result<Response, crate::Error>> {
+    pub fn send(self) -> Pending<'a> {
         match self.request {
             Ok(req) => self.client.execute_request(req),
             Err(err) => Pending::new_err(err),
@@ -548,7 +546,7 @@ impl fmt::Debug for Request {
     }
 }
 
-impl fmt::Debug for RequestBuilder {
+impl<'a> fmt::Debug for RequestBuilder<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut builder = f.debug_struct("RequestBuilder");
         match self.request {
@@ -912,10 +910,12 @@ mod tests {
 
     #[test]
     fn builder_split_reassemble() {
+        let client = Client::new();
+
         let builder = {
-            let client = Client::new();
             client.get("http://example.com")
         };
+        
         let (client, inner) = builder.build_split();
         let request = inner.unwrap();
         let builder = RequestBuilder::from_parts(client, request);
